@@ -1,0 +1,951 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Beer Counter</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Beer Counter">
+<meta name="theme-color" content="#243320">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html { height: 100%; }
+  body {
+    margin: 0; padding: 0;
+    height: 100%;
+    font-family: 'Outfit', system-ui, sans-serif;
+    background: #243320;
+    color: #251608;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+  #root {
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+  }
+  button { font-family: inherit; }
+  input { font-family: inherit; }
+  ::-webkit-scrollbar { display: none; }
+  * { scrollbar-width: none; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+// ── Persistence ───────────────────────────────────────────────────────────────
+
+function usePersistedSettings(key, defaults) {
+  const [settings, setRaw] = useState(() => {
+    try {
+      const s = localStorage.getItem(key);
+      if (s !== null) return { ...defaults, ...JSON.parse(s) };
+    } catch {}
+    return defaults;
+  });
+  const setTweak = useCallback((k, v) => {
+    setRaw(prev => {
+      const next = { ...prev, [k]: v };
+      try { localStorage.setItem(key, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, [key]);
+  return [settings, setTweak];
+}
+
+function usePersisted(key, init) {
+  const [val, setVal] = useState(() => {
+    try {
+      const s = localStorage.getItem(key);
+      if (s !== null) return JSON.parse(s);
+    } catch {}
+    return typeof init === 'function' ? init() : init;
+  });
+  const update = useCallback((updater) => {
+    setVal(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      try { localStorage.setItem(key, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, [key]);
+  return [val, update];
+}
+
+function usePersistedLog() {
+  const [raw, setRaw] = useState(() => {
+    try {
+      const s = localStorage.getItem('beer-log');
+      if (s) return JSON.parse(s);
+    } catch {}
+    return [];
+  });
+
+  const log = useMemo(() =>
+    raw.map(e => ({ ...e, time: new Date(e.time) })),
+    [raw]
+  );
+
+  const setLog = useCallback((updater) => {
+    setRaw(prev => {
+      const prevDates = prev.map(e => ({ ...e, time: new Date(e.time) }));
+      const next = typeof updater === 'function' ? updater(prevDates) : updater;
+      const toStore = next.map(e => ({
+        ...e,
+        time: e.time instanceof Date ? e.time.toISOString() : e.time,
+      }));
+      try { localStorage.setItem('beer-log', JSON.stringify(toStore)); } catch {}
+      return toStore;
+    });
+  }, []);
+
+  return [log, setLog];
+}
+
+// ── Theme tokens ──────────────────────────────────────────────────────────────
+
+const THEMES = {
+  forest: {
+    bg: '#e6ede0', bgDeep: '#d4dece', card: '#f0f5ec', cardSoft: '#e2ead9',
+    line: 'rgba(28,50,24,0.09)', ink: '#192416', inkSoft: '#4e6847',
+    inkMuted: 'rgba(28,50,24,0.42)', accent: '#3d7a52', accentDeep: '#275c39', stout: '#0f1c0c',
+  },
+  night: {
+    bg: '#101910', bgDeep: '#080f08', card: '#182018', cardSoft: '#131b13',
+    line: 'rgba(180,230,160,0.07)', ink: '#d4e8c8', inkSoft: '#7da870',
+    inkMuted: 'rgba(200,230,180,0.38)', accent: '#5eb87a', accentDeep: '#3d9458', stout: '#d4e8c8',
+  },
+  autumn: {
+    bg: '#ede6da', bgDeep: '#e0d4c0', card: '#f7f2ea', cardSoft: '#ecddc8',
+    line: 'rgba(60,40,20,0.09)', ink: '#221608', inkSoft: '#6b4e2e',
+    inkMuted: 'rgba(60,40,20,0.42)', accent: '#7a5c2a', accentDeep: '#5a4018', stout: '#180e04',
+  },
+};
+
+const CATEGORY_PRESETS = [
+  { id: 'ipa',     name: 'IPA',     swatch: '#d4912e', sub: 'Hoppy' },
+  { id: 'pilsner', name: 'Pilsner', swatch: '#e8c259', sub: 'Crisp' },
+  { id: 'stout',   name: 'Stout',   swatch: '#2a1409', sub: 'Roasty' },
+  { id: 'sour',    name: 'Sour',    swatch: '#c66a55', sub: 'Tart' },
+  { id: 'lager',   name: 'Lager',   swatch: '#cb9540', sub: 'Clean' },
+  { id: 'wheat',   name: 'Wheat',   swatch: '#e2cf86', sub: 'Soft' },
+];
+
+const SETTINGS_DEFAULTS = {
+  theme: 'forest',
+  unit: 'beers',
+  weeklyGoal: 14,
+  showNotes: true,
+};
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+
+function fmtTime(d) {
+  let h = d.getHours();
+  const m = d.getMinutes();
+  const am = h < 12;
+  h = h % 12 || 12;
+  return `${h}:${String(m).padStart(2, '0')} ${am ? 'am' : 'pm'}`;
+}
+function isSameDay(a, b) {
+  return a.getFullYear() === b.getFullYear() &&
+         a.getMonth() === b.getMonth() &&
+         a.getDate() === b.getDate();
+}
+function startOfWeek(d) {
+  const x = new Date(d);
+  const diff = (x.getDay() + 6) % 7;
+  x.setDate(x.getDate() - diff);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+const WEEKDAYS  = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+const MONTHS    = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const WEEKNAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+function fmtDay(d) {
+  return `${WEEKNAMES[d.getDay()]}, ${MONTHS[d.getMonth()]} ${d.getDate()}`;
+}
+
+// ── Icons ─────────────────────────────────────────────────────────────────────
+
+const Icon = {
+  Plus:     (p) => <svg width="16" height="16" viewBox="0 0 16 16" fill="none" {...p}><path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>,
+  Minus:    (p) => <svg width="16" height="16" viewBox="0 0 16 16" fill="none" {...p}><path d="M3 8h10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>,
+  X:        (p) => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" {...p}><path d="m3 3 8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>,
+  Today:    (p) => <svg width="20" height="20" viewBox="0 0 20 20" fill="none" {...p}><circle cx="10" cy="10" r="6.2" stroke="currentColor" strokeWidth="1.6"/><circle cx="10" cy="10" r="2" fill="currentColor"/></svg>,
+  Log:      (p) => <svg width="20" height="20" viewBox="0 0 20 20" fill="none" {...p}><path d="M4 5h12M4 10h12M4 15h8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>,
+  Stats:    (p) => <svg width="20" height="20" viewBox="0 0 20 20" fill="none" {...p}><path d="M4 16V9M10 16V4M16 16v-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>,
+  Settings: (p) => <svg width="18" height="18" viewBox="0 0 18 18" fill="none" {...p}><circle cx="9" cy="9" r="2.2" stroke="currentColor" strokeWidth="1.4"/><circle cx="9" cy="9" r="6" stroke="currentColor" strokeWidth="1.4" strokeDasharray="1.6 2"/></svg>,
+};
+
+// ── Shared style ──────────────────────────────────────────────────────────────
+
+const btn = {
+  border: 'none', cursor: 'pointer', font: 'inherit',
+  WebkitTapHighlightColor: 'transparent', userSelect: 'none',
+};
+
+// ── Decorations ───────────────────────────────────────────────────────────────
+
+function MountainDeco({ T }) {
+  return (
+    <div style={{ position:'absolute', right:-8, top:0, bottom:0, width:140, overflow:'hidden', pointerEvents:'none', opacity:0.13 }}>
+      <div style={{ position:'absolute', bottom:0, right:10, width:130, height:130, background:T.stout, clipPath:'polygon(50% 0%, 100% 100%, 0% 100%)' }}/>
+      <div style={{ position:'absolute', bottom:0, right:-10, width:100, height:100, background:T.accent, clipPath:'polygon(50% 0%, 100% 100%, 0% 100%)' }}/>
+      <div style={{ position:'absolute', bottom:68, right:30, width:40, height:30, background:T.card, clipPath:'polygon(50% 0%, 100% 100%, 0% 100%)', opacity:0.9 }}/>
+    </div>
+  );
+}
+
+function BeerGlyph({ color, size = 40 }) {
+  return (
+    <div style={{
+      width:size, height:size, borderRadius:size/2, background:color,
+      display:'flex', alignItems:'center', justifyContent:'center',
+      position:'relative', overflow:'hidden',
+      boxShadow:'inset 0 -8px 16px rgba(0,0,0,0.16), inset 0 6px 10px rgba(255,255,255,0.35)',
+    }}>
+      <div style={{ position:'absolute', top:0, left:0, right:0, height:'38%', background:'rgba(255,250,235,0.92)', borderBottom:'1px solid rgba(0,0,0,0.06)' }}/>
+      <div style={{ position:'absolute', top:'12%', left:'24%', width:size*0.12, height:size*0.12, borderRadius:'50%', background:'rgba(255,255,255,0.7)' }}/>
+    </div>
+  );
+}
+
+// ── Shared sub-components ─────────────────────────────────────────────────────
+
+function SectionLabel({ T, children }) {
+  return (
+    <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, letterSpacing:'0.14em', textTransform:'uppercase', color:T.inkMuted, paddingLeft:4 }}>
+      {children}
+    </div>
+  );
+}
+
+function CountFlip({ value }) {
+  const [display, setDisplay] = useState(value);
+  const [bump, setBump] = useState(false);
+  useEffect(() => {
+    if (value !== display) {
+      setBump(true);
+      const t1 = setTimeout(() => setDisplay(value), 60);
+      const t2 = setTimeout(() => setBump(false), 380);
+      return () => { clearTimeout(t1); clearTimeout(t2); };
+    }
+  }, [value]);
+  return (
+    <span style={{
+      display:'inline-block',
+      transform: bump ? 'scale(1.08) translateY(-2px)' : 'scale(1)',
+      transition:'transform 380ms cubic-bezier(.3,1.5,.5,1)',
+    }}>{display}</span>
+  );
+}
+
+function LogRow({ entry, cat, T, isLast, showNotes }) {
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 14px', borderBottom: isLast ? 'none' : `1px solid ${T.line}` }}>
+      <div style={{ width:8, height:8, borderRadius:'50%', background:cat?.swatch || T.accent, flexShrink:0 }}/>
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ fontSize:13, color:T.ink, fontWeight:500 }}>{cat?.name || 'Beer'}</div>
+        {showNotes && entry.note && (
+          <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:13, color:T.inkSoft, marginTop:1, lineHeight:1.2 }}>
+            "{entry.note}"
+          </div>
+        )}
+      </div>
+      <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:11, color:T.inkMuted, letterSpacing:'0.04em' }}>
+        {fmtTime(entry.time)}
+      </div>
+    </div>
+  );
+}
+
+function SwipeRow({ children, onRemove, T }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position:'relative' }}>
+      <div style={{
+        position:'absolute', right:0, top:0, bottom:0, width:76,
+        background:'#c14a3a', display:'flex', alignItems:'center', justifyContent:'center',
+        color:'#fff', fontSize:12, fontWeight:600,
+      }} onClick={onRemove}>Delete</div>
+      <div onClick={() => setOpen(o => !o)} style={{
+        background:T.card, position:'relative',
+        transform: open ? 'translateX(-76px)' : 'translateX(0)',
+        transition:'transform 250ms cubic-bezier(.3,1,.4,1)',
+        cursor:'pointer',
+      }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ── Today screen ──────────────────────────────────────────────────────────────
+
+function TodayScreen({ T, log, categories, setLog, tweaks, openAdd, openSettings }) {
+  const now = new Date();
+  const todays    = log.filter(e => isSameDay(e.time, now));
+  const weekStart = startOfWeek(now);
+  const weekTotal = log.filter(e => e.time >= weekStart).length;
+  const goal      = tweaks.weeklyGoal;
+  const pct       = Math.min(weekTotal / goal, 1);
+
+  const [pulse, setPulse] = useState(null);
+
+  const incr = (cat) => {
+    const entry = { id: 'l' + Date.now() + Math.random(), categoryId: cat.id, time: new Date(), note: '' };
+    setLog(prev => [entry, ...prev]);
+    setPulse(cat.id);
+    setTimeout(() => setPulse(null), 350);
+  };
+  const undoLast = () => setLog(prev => prev.slice(1));
+
+  const weekNum = Math.ceil(((now - new Date(now.getFullYear(),0,1))/86400000 + new Date(now.getFullYear(),0,1).getDay()+1)/7);
+
+  return (
+    <div style={{ padding:'0 0 120px', paddingTop:'max(64px, calc(env(safe-area-inset-top) + 10px))', color:T.ink }}>
+      {/* Header */}
+      <div style={{ padding:'8px 22px 4px', display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+        <div>
+          <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:28, letterSpacing:'-0.01em', lineHeight:1 }}>
+            {WEEKNAMES[now.getDay()]}
+          </div>
+          <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:11, color:T.inkSoft, marginTop:4, letterSpacing:'0.04em' }}>
+            {MONTHS[now.getMonth()].toUpperCase()} {String(now.getDate()).padStart(2,'0')} · WK {weekNum}
+          </div>
+        </div>
+        <button onClick={openSettings} style={{
+          ...btn, background:'transparent', color:T.inkSoft, padding:'8px',
+          border:`1px solid ${T.line}`, borderRadius:999,
+          display:'inline-flex', alignItems:'center', justifyContent:'center',
+        }}>
+          <Icon.Settings/>
+        </button>
+      </div>
+
+      {/* Big counter card */}
+      <div style={{ margin:'14px 18px 0', borderRadius:28, background:T.card, border:`1px solid ${T.line}`, padding:'22px 22px 20px', position:'relative', overflow:'hidden' }}>
+        <MountainDeco T={T}/>
+        <div style={{ display:'flex', alignItems:'baseline', gap:12 }}>
+          <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:112, lineHeight:0.86, letterSpacing:'-0.04em', color:T.stout }}>
+            <CountFlip value={todays.length}/>
+          </div>
+          <div style={{ paddingBottom:8 }}>
+            <div style={{ fontSize:13, color:T.inkSoft }}>{tweaks.unit} today</div>
+            <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, color:T.inkMuted, marginTop:2, letterSpacing:'0.06em' }}>
+              {weekTotal}/{goal} THIS WEEK
+            </div>
+          </div>
+        </div>
+        <div style={{ marginTop:14, height:6, borderRadius:3, background:T.bgDeep, overflow:'hidden' }}>
+          <div style={{ width:`${pct*100}%`, height:'100%', background:T.accent, borderRadius:3, transition:'width 350ms cubic-bezier(.4,1.4,.5,1)' }}/>
+        </div>
+        {todays.length > 0 && (
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:14 }}>
+            <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, color:T.inkMuted, letterSpacing:'0.08em' }}>
+              LAST · {fmtTime(todays[0].time)} · {categories.find(c => c.id === todays[0].categoryId)?.name}
+            </div>
+            <button onClick={undoLast} style={{
+              ...btn, fontSize:11, padding:'5px 10px', borderRadius:999,
+              background:'transparent', color:T.inkSoft, border:`1px solid ${T.line}`,
+              fontFamily:'JetBrains Mono, monospace', letterSpacing:'0.06em',
+            }}>UNDO</button>
+          </div>
+        )}
+      </div>
+
+      {/* Quick-add grid */}
+      <div style={{ padding:'24px 18px 0' }}>
+        <SectionLabel T={T}>Tap to add</SectionLabel>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:10 }}>
+          {categories.map(cat => {
+            const count = todays.filter(e => e.categoryId === cat.id).length;
+            const pulsing = pulse === cat.id;
+            return (
+              <button key={cat.id} onClick={() => incr(cat)} style={{
+                ...btn, background:T.card, border:`1px solid ${T.line}`, borderRadius:20,
+                padding:'12px 14px', textAlign:'left', display:'flex', alignItems:'center', gap:12,
+                transform: pulsing ? 'scale(0.97)' : 'scale(1)',
+                boxShadow: pulsing ? `0 0 0 3px ${cat.swatch}33` : 'none',
+                transition:'transform 180ms cubic-bezier(.3,1.5,.5,1), box-shadow 180ms',
+                position:'relative', overflow:'hidden',
+              }}>
+                <BeerGlyph color={cat.swatch} size={36}/>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontWeight:500, fontSize:14, color:T.ink, lineHeight:1.1 }}>{cat.name}</div>
+                  <div style={{ fontSize:11, color:T.inkSoft, marginTop:2 }}>{cat.sub}</div>
+                </div>
+                <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:26, color: count ? T.stout : T.inkMuted, lineHeight:1 }}>
+                  {count || '·'}
+                </div>
+              </button>
+            );
+          })}
+          <button onClick={openAdd} style={{
+            ...btn, background:'transparent', border:`1.5px dashed ${T.line}`, borderRadius:20,
+            padding:'12px 14px', display:'flex', alignItems:'center', justifyContent:'center', gap:8,
+            color:T.inkSoft, gridColumn:'span 2', minHeight:52,
+          }}>
+            <Icon.Plus/>
+            <span style={{ fontSize:13 }}>New type</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Today inline preview */}
+      {todays.length > 0 && (
+        <div style={{ padding:'22px 18px 0' }}>
+          <SectionLabel T={T}>Today's pours</SectionLabel>
+          <div style={{ marginTop:10, background:T.card, borderRadius:18, border:`1px solid ${T.line}`, overflow:'hidden' }}>
+            {todays.slice(0, 4).map((entry, i) => (
+              <LogRow key={entry.id} entry={entry} cat={categories.find(c => c.id === entry.categoryId)} T={T} isLast={i === Math.min(3, todays.length-1)} showNotes={tweaks.showNotes}/>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Log screen ────────────────────────────────────────────────────────────────
+
+function LogScreen({ T, log, categories, setLog, tweaks, openSettings }) {
+  const now = new Date();
+  const yesterday = new Date(now.getTime() - 86400000);
+
+  const groups = useMemo(() => {
+    const m = new Map();
+    log.forEach(e => {
+      const key = new Date(e.time.getFullYear(), e.time.getMonth(), e.time.getDate()).getTime();
+      if (!m.has(key)) m.set(key, []);
+      m.get(key).push(e);
+    });
+    return [...m.entries()].sort((a,b) => b[0]-a[0]).map(([k, items]) => ({
+      date: new Date(k), items: items.sort((a,b) => b.time-a.time),
+    }));
+  }, [log]);
+
+  const removeEntry = (id) => setLog(prev => prev.filter(e => e.id !== id));
+
+  return (
+    <div style={{ padding:'0 0 130px', paddingTop:'max(64px, calc(env(safe-area-inset-top) + 10px))', color:T.ink }}>
+      <div style={{ padding:'8px 22px 14px', display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+        <div>
+          <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:28, lineHeight:1, letterSpacing:'-0.01em' }}>The log</div>
+          <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:11, color:T.inkSoft, marginTop:4, letterSpacing:'0.04em' }}>
+            {log.length} POURS · ALL TIME
+          </div>
+        </div>
+        <button onClick={openSettings} style={{
+          ...btn, background:'transparent', color:T.inkSoft, padding:'8px',
+          border:`1px solid ${T.line}`, borderRadius:999, marginTop:4,
+          display:'inline-flex', alignItems:'center', justifyContent:'center',
+        }}><Icon.Settings/></button>
+      </div>
+
+      {groups.length === 0 && (
+        <div style={{ padding:'60px 40px', textAlign:'center', color:T.inkMuted, fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:18, lineHeight:1.5 }}>
+          No pours logged yet.<br/>Tap a beer type on Today to get started.
+        </div>
+      )}
+
+      {groups.map(group => (
+        <div key={group.date.getTime()} style={{ padding:'6px 18px 16px' }}>
+          <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', paddingBottom:8 }}>
+            <div style={{ fontSize:13, fontWeight:600, color:T.ink }}>
+              {isSameDay(group.date, now) ? 'Today' :
+               isSameDay(group.date, yesterday) ? 'Yesterday' :
+               fmtDay(group.date)}
+            </div>
+            <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:11, color:T.inkMuted, letterSpacing:'0.04em' }}>
+              {group.items.length} ×
+            </div>
+          </div>
+          <div style={{ background:T.card, borderRadius:18, border:`1px solid ${T.line}`, overflow:'hidden' }}>
+            {group.items.map((e, i) => (
+              <SwipeRow key={e.id} onRemove={() => removeEntry(e.id)} T={T}>
+                <LogRow entry={e} cat={categories.find(c => c.id === e.categoryId)} T={T} isLast={i === group.items.length-1} showNotes={tweaks.showNotes}/>
+              </SwipeRow>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Stats screen ──────────────────────────────────────────────────────────────
+
+function StatsScreen({ T, log, categories, tweaks, openSettings }) {
+  const now = new Date();
+
+  const days = useMemo(() => {
+    const n = new Date();
+    return Array.from({ length:7 }, (_, i) => {
+      const d = new Date(n); d.setDate(d.getDate() - (6-i)); d.setHours(0,0,0,0);
+      const next = new Date(d); next.setDate(d.getDate()+1);
+      return { date:d, count: log.filter(e => e.time >= d && e.time < next).length, label: WEEKDAYS[(d.getDay()+6)%7] };
+    });
+  }, [log]);
+
+  const maxCount  = Math.max(1, ...days.map(d => d.count));
+  const weekTotal = days.reduce((s,d) => s+d.count, 0);
+
+  const typeBreakdown = useMemo(() => {
+    const weekStart = startOfWeek(new Date());
+    const counts = {};
+    log.forEach(e => {
+      if (e.time >= weekStart) counts[e.categoryId] = (counts[e.categoryId] || 0) + 1;
+    });
+    return Object.entries(counts).map(([id, n]) => ({
+      cat: categories.find(c => c.id === id), n,
+    })).filter(x => x.cat).sort((a,b) => b.n-a.n);
+  }, [log, categories]);
+
+  const streak = useMemo(() => {
+    const n = new Date();
+    let s = 0;
+    for (let i = 0; i < 60; i++) {
+      const d = new Date(n); d.setDate(d.getDate()-i); d.setHours(0,0,0,0);
+      const next = new Date(d); next.setDate(d.getDate()+1);
+      if (log.some(e => e.time >= d && e.time < next)) s++;
+      else if (i > 0) break;
+    }
+    return s;
+  }, [log]);
+
+  const weekStart = startOfWeek(now);
+
+  return (
+    <div style={{ padding:'0 0 130px', paddingTop:'max(64px, calc(env(safe-area-inset-top) + 10px))', color:T.ink }}>
+      <div style={{ padding:'8px 22px 14px', display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+        <div>
+          <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:28, lineHeight:1, letterSpacing:'-0.01em' }}>By the numbers</div>
+          <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:11, color:T.inkSoft, marginTop:4, letterSpacing:'0.04em' }}>
+            WEEK OF {MONTHS[weekStart.getMonth()].toUpperCase()} {weekStart.getDate()}
+          </div>
+        </div>
+        <button onClick={openSettings} style={{
+          ...btn, background:'transparent', color:T.inkSoft, padding:'8px',
+          border:`1px solid ${T.line}`, borderRadius:999, marginTop:4,
+          display:'inline-flex', alignItems:'center', justifyContent:'center',
+        }}><Icon.Settings/></button>
+      </div>
+
+      <div style={{ padding:'0 18px', display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+        <StatCard T={T} value={weekTotal} label="this week" sub={tweaks.weeklyGoal - weekTotal > 0 ? `${tweaks.weeklyGoal - weekTotal} to goal` : 'goal hit'}/>
+        <StatCard T={T} value={streak} label={`day${streak === 1 ? '' : 's'} streak`} sub={streak >= 3 ? 'on a roll' : 'just started'} accent/>
+      </div>
+
+      <div style={{ margin:'18px 18px 0', padding:'18px 18px 16px', background:T.card, borderRadius:22, border:`1px solid ${T.line}` }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:16 }}>
+          <SectionLabel T={T}>Last 7 days</SectionLabel>
+          <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, color:T.inkMuted, letterSpacing:'0.06em' }}>
+            AVG {(weekTotal/7).toFixed(1)}/DAY
+          </div>
+        </div>
+        <div style={{ display:'flex', alignItems:'flex-end', gap:8, height:140 }}>
+          {days.map((d, i) => {
+            const h = (d.count / maxCount) * 96;
+            const isToday = isSameDay(d.date, now);
+            return (
+              <div key={i} style={{ flex:1, height:'100%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'flex-end', gap:6 }}>
+                <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, color: d.count ? T.ink : T.inkMuted, height:14, lineHeight:'14px' }}>{d.count || ''}</div>
+                <div style={{
+                  width:'100%', height: d.count === 0 ? 3 : Math.max(h, 8),
+                  background: d.count === 0 ? T.bgDeep : (isToday ? T.accent : T.accentDeep),
+                  borderRadius:6, opacity: d.count === 0 ? 0.5 : 1,
+                  transition:'height 400ms cubic-bezier(.3,1,.4,1)',
+                }}/>
+                <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, color: isToday ? T.ink : T.inkMuted, fontWeight: isToday ? 600 : 400, height:14, lineHeight:'14px' }}>
+                  {d.label[0]}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {typeBreakdown.length > 0 && (
+        <div style={{ margin:'18px 18px 0', padding:'18px 18px 14px', background:T.card, borderRadius:22, border:`1px solid ${T.line}` }}>
+          <SectionLabel T={T}>Top of the week</SectionLabel>
+          <div style={{ marginTop:14, display:'flex', flexDirection:'column', gap:12 }}>
+            {typeBreakdown.map(({ cat, n }) => (
+              <div key={cat.id}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:4 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                    <div style={{ width:8, height:8, borderRadius:'50%', background:cat.swatch }}/>
+                    <div style={{ fontSize:13, color:T.ink }}>{cat.name}</div>
+                  </div>
+                  <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:18, color:T.stout, lineHeight:1 }}>{n}</div>
+                </div>
+                <div style={{ height:4, borderRadius:2, background:T.bgDeep, overflow:'hidden' }}>
+                  <div style={{ width:`${(n/typeBreakdown[0].n)*100}%`, height:'100%', background:cat.swatch, borderRadius:2 }}/>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatCard({ T, value, label, sub, accent }) {
+  return (
+    <div style={{
+      background: accent ? T.stout : T.card,
+      color: accent ? T.bg : T.ink,
+      borderRadius:22, padding:'16px 16px 14px',
+      border: accent ? 'none' : `1px solid ${T.line}`,
+      position:'relative', overflow:'hidden', minHeight:100,
+    }}>
+      <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:56, lineHeight:0.9, letterSpacing:'-0.03em', color: accent ? T.bg : T.stout }}>{value}</div>
+      <div style={{ fontSize:12, marginTop:4, opacity:0.9 }}>{label}</div>
+      <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, letterSpacing:'0.08em', marginTop:6, opacity:0.55, textTransform:'uppercase' }}>{sub}</div>
+    </div>
+  );
+}
+
+// ── Settings sheet ────────────────────────────────────────────────────────────
+
+const THEME_OPTIONS = [
+  { value:'forest',  label:'Pine Forest', swatches:['#3d7a52','#e6ede0','#0f1c0c'] },
+  { value:'night',   label:'Night Camp',  swatches:['#5eb87a','#101910','#d4e8c8'] },
+  { value:'autumn',  label:'Autumn Trail',swatches:['#7a5c2a','#ede6da','#221608'] },
+];
+const UNIT_OPTIONS = ['beers','pints','cans'];
+
+function SettingsSheet({ T, open, onClose, tweaks, setTweak }) {
+  return (
+    <>
+      <div onClick={onClose} style={{
+        position:'absolute', inset:0, background:'rgba(10,20,8,0.5)',
+        opacity: open ? 1 : 0, pointerEvents: open ? 'auto' : 'none',
+        transition:'opacity 250ms', zIndex:40,
+      }}/>
+      <div style={{
+        position:'absolute', left:0, right:0, bottom:0,
+        background:T.bg, borderTopLeftRadius:28, borderTopRightRadius:28,
+        paddingTop:12, paddingLeft:22, paddingRight:22,
+        paddingBottom:'max(36px, calc(env(safe-area-inset-bottom) + 18px))',
+        transform: open ? 'translateY(0)' : 'translateY(105%)',
+        transition:'transform 320ms cubic-bezier(.3,1,.4,1)',
+        zIndex:41, boxShadow:'0 -10px 40px rgba(10,20,8,0.22)',
+      }}>
+        <div style={{ width:38, height:4, borderRadius:2, background:T.inkMuted, margin:'4px auto 16px', opacity:0.45 }}/>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
+          <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:24, color:T.ink, lineHeight:1 }}>Settings</div>
+          <button onClick={onClose} style={{ ...btn, color:T.inkSoft, padding:6 }}><Icon.X/></button>
+        </div>
+
+        <SettingsLabel T={T}>Theme</SettingsLabel>
+        <div style={{ display:'flex', gap:8, marginTop:8, marginBottom:20 }}>
+          {THEME_OPTIONS.map(opt => {
+            const active = tweaks.theme === opt.value;
+            return (
+              <button key={opt.value} onClick={() => setTweak('theme', opt.value)} style={{
+                ...btn, flex:1, borderRadius:16, padding:'12px 8px',
+                background: active ? T.stout : T.card,
+                border:`1.5px solid ${active ? T.stout : T.line}`,
+                display:'flex', flexDirection:'column', alignItems:'center', gap:8,
+                transition:'all 200ms',
+              }}>
+                <div style={{ display:'flex', gap:3 }}>
+                  {opt.swatches.map((s, i) => (
+                    <div key={i} style={{ width: i===0 ? 16 : 10, height: i===0 ? 16 : 10, borderRadius:'50%', background:s, alignSelf:'center' }}/>
+                  ))}
+                </div>
+                <div style={{ fontSize:10, fontFamily:'JetBrains Mono, monospace', letterSpacing:'0.06em', color: active ? T.bg : T.inkSoft, textAlign:'center', lineHeight:1.3 }}>
+                  {opt.label.toUpperCase()}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        <SettingsLabel T={T}>Unit</SettingsLabel>
+        <div style={{ display:'flex', gap:0, marginTop:8, marginBottom:20, background:T.bgDeep, borderRadius:14, padding:3, border:`1px solid ${T.line}` }}>
+          {UNIT_OPTIONS.map(u => {
+            const active = tweaks.unit === u;
+            return (
+              <button key={u} onClick={() => setTweak('unit', u)} style={{
+                ...btn, flex:1, padding:'10px 8px', borderRadius:11,
+                background: active ? T.card : 'transparent',
+                color: active ? T.ink : T.inkSoft,
+                fontSize:13, fontWeight: active ? 500 : 400,
+                boxShadow: active ? '0 1px 4px rgba(0,0,0,0.10)' : 'none',
+                border:'none', transition:'all 200ms',
+              }}>{u}</button>
+            );
+          })}
+        </div>
+
+        <SettingsLabel T={T}>Weekly goal</SettingsLabel>
+        <div style={{ display:'flex', alignItems:'center', gap:16, marginTop:8, marginBottom:20 }}>
+          <button onClick={() => setTweak('weeklyGoal', Math.max(1, tweaks.weeklyGoal-1))} style={{
+            ...btn, width:40, height:40, borderRadius:20,
+            background:T.card, border:`1px solid ${T.line}`,
+            display:'flex', alignItems:'center', justifyContent:'center', color:T.ink,
+          }}><Icon.Minus/></button>
+          <div style={{ flex:1, textAlign:'center' }}>
+            <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:42, color:T.stout, lineHeight:1 }}>{tweaks.weeklyGoal}</div>
+            <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, color:T.inkMuted, letterSpacing:'0.08em', marginTop:2 }}>
+              {tweaks.unit.toUpperCase()} / WEEK
+            </div>
+          </div>
+          <button onClick={() => setTweak('weeklyGoal', Math.min(50, tweaks.weeklyGoal+1))} style={{
+            ...btn, width:40, height:40, borderRadius:20,
+            background:T.card, border:`1px solid ${T.line}`,
+            display:'flex', alignItems:'center', justifyContent:'center', color:T.ink,
+          }}><Icon.Plus/></button>
+        </div>
+
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'14px 16px', background:T.card, borderRadius:16, border:`1px solid ${T.line}` }}>
+          <div>
+            <div style={{ fontSize:14, color:T.ink, fontWeight:500 }}>Show pour notes</div>
+            <div style={{ fontSize:11, color:T.inkSoft, marginTop:2 }}>Display notes in the log</div>
+          </div>
+          <button onClick={() => setTweak('showNotes', !tweaks.showNotes)} style={{
+            ...btn, width:50, height:28, borderRadius:14, padding:3,
+            background: tweaks.showNotes ? T.accent : T.bgDeep,
+            border:`1px solid ${tweaks.showNotes ? T.accent : T.line}`,
+            display:'flex', alignItems:'center',
+            justifyContent: tweaks.showNotes ? 'flex-end' : 'flex-start',
+            transition:'all 220ms',
+          }}>
+            <div style={{ width:22, height:22, borderRadius:11, background: tweaks.showNotes ? '#fff' : T.inkMuted, transition:'all 220ms', flexShrink:0 }}/>
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function SettingsLabel({ T, children }) {
+  return (
+    <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, letterSpacing:'0.14em', textTransform:'uppercase', color:T.inkMuted, paddingLeft:2, fontWeight:600 }}>
+      {children}
+    </div>
+  );
+}
+
+// ── Add-type sheet ────────────────────────────────────────────────────────────
+
+const SWATCH_OPTIONS = [
+  '#d4912e','#e8c259','#2a1409','#c66a55','#cb9540','#e2cf86',
+  '#7d3e2a','#a05c33','#d97049','#6b8e4e','#3a5a72','#8c5fb1',
+];
+
+function AddSheet({ T, open, onClose, onSave }) {
+  const [name, setName]   = useState('');
+  const [sub, setSub]     = useState('');
+  const [color, setColor] = useState(SWATCH_OPTIONS[0]);
+  useEffect(() => {
+    if (open) { setName(''); setSub(''); setColor(SWATCH_OPTIONS[Math.floor(Math.random()*SWATCH_OPTIONS.length)]); }
+  }, [open]);
+  const canSave = name.trim().length > 0;
+
+  return (
+    <>
+      <div onClick={onClose} style={{
+        position:'absolute', inset:0, background:'rgba(20,12,4,0.45)',
+        opacity: open ? 1 : 0, pointerEvents: open ? 'auto' : 'none',
+        transition:'opacity 250ms', zIndex:30,
+      }}/>
+      <div style={{
+        position:'absolute', left:0, right:0, bottom:0,
+        background:T.bg, borderTopLeftRadius:28, borderTopRightRadius:28,
+        paddingTop:12, paddingLeft:22, paddingRight:22,
+        paddingBottom:'max(28px, calc(env(safe-area-inset-bottom) + 14px))',
+        transform: open ? 'translateY(0)' : 'translateY(100%)',
+        transition:'transform 320ms cubic-bezier(.3,1,.4,1)',
+        zIndex:31, boxShadow:'0 -10px 30px rgba(20,12,4,0.18)',
+      }}>
+        <div style={{ width:38, height:4, borderRadius:2, background:T.inkMuted, margin:'4px auto 14px', opacity:0.4 }}/>
+        <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between' }}>
+          <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:24, color:T.ink, lineHeight:1 }}>New beer type</div>
+          <button onClick={onClose} style={{ ...btn, color:T.inkSoft, padding:6 }}><Icon.X/></button>
+        </div>
+
+        <div style={{ marginTop:16, padding:'12px 14px', background:T.card, borderRadius:20, border:`1px solid ${T.line}`, display:'flex', alignItems:'center', gap:12 }}>
+          <BeerGlyph color={color} size={42}/>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:14, fontWeight:500, color:T.ink }}>{name || 'Untitled'}</div>
+            <div style={{ fontSize:11, color:T.inkSoft }}>{sub || 'Tagline (optional)'}</div>
+          </div>
+        </div>
+
+        <div style={{ marginTop:18 }}>
+          <FieldLabel T={T}>Name</FieldLabel>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="Hazy IPA" style={{
+            width:'100%', padding:'12px 14px', borderRadius:14,
+            background:T.card, border:`1px solid ${T.line}`,
+            fontSize:15, color:T.ink, outline:'none', fontFamily:'inherit',
+          }}/>
+        </div>
+
+        <div style={{ marginTop:12 }}>
+          <FieldLabel T={T}>Note <span style={{ color:T.inkMuted, fontWeight:400 }}>· optional</span></FieldLabel>
+          <input value={sub} onChange={e => setSub(e.target.value)} placeholder="Hoppy, juicy, 6.8%" style={{
+            width:'100%', padding:'12px 14px', borderRadius:14,
+            background:T.card, border:`1px solid ${T.line}`,
+            fontSize:15, color:T.ink, outline:'none', fontFamily:'inherit',
+          }}/>
+        </div>
+
+        <div style={{ marginTop:14 }}>
+          <FieldLabel T={T}>Color</FieldLabel>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
+            {SWATCH_OPTIONS.map(s => (
+              <button key={s} onClick={() => setColor(s)} style={{
+                ...btn, width:36, height:36, borderRadius:18, background:s, padding:0,
+                border: color===s ? `2.5px solid ${T.ink}` : '2px solid transparent',
+                boxShadow:'inset 0 -4px 8px rgba(0,0,0,0.16), inset 0 3px 6px rgba(255,255,255,0.25)',
+              }}/>
+            ))}
+          </div>
+        </div>
+
+        <button disabled={!canSave} onClick={() => { onSave({ name:name.trim(), sub:sub.trim(), swatch:color }); onClose(); }} style={{
+          ...btn, marginTop:22, width:'100%',
+          background: canSave ? T.stout : T.bgDeep,
+          color: canSave ? T.bg : T.inkMuted,
+          padding:'14px 16px', borderRadius:16, fontSize:15, fontWeight:500, transition:'all 200ms',
+        }}>
+          Save type
+        </button>
+      </div>
+    </>
+  );
+}
+
+function FieldLabel({ T, children }) {
+  return (
+    <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', color:T.inkMuted, marginBottom:6, paddingLeft:2, fontWeight:600 }}>
+      {children}
+    </div>
+  );
+}
+
+// ── Tab bar ───────────────────────────────────────────────────────────────────
+
+function TabBar({ T, tab, setTab }) {
+  const tabs = [
+    { id:'today', label:'Today', icon: Icon.Today },
+    { id:'log',   label:'Log',   icon: Icon.Log   },
+    { id:'stats', label:'Stats', icon: Icon.Stats  },
+  ];
+  const dark = T === THEMES.night;
+  return (
+    <div style={{
+      position:'absolute', left:12, right:12,
+      bottom:'max(8px, calc(env(safe-area-inset-bottom) + 4px))',
+      display:'flex', gap:4, padding:6,
+      background: dark ? 'rgba(24,32,24,0.90)' : 'rgba(255,250,240,0.86)',
+      backdropFilter:'blur(20px) saturate(140%)',
+      WebkitBackdropFilter:'blur(20px) saturate(140%)',
+      borderRadius:28, border:`1px solid ${T.line}`,
+      boxShadow:'0 4px 18px rgba(20,12,4,0.10)',
+      zIndex:20,
+    }}>
+      {tabs.map(t => {
+        const I = t.icon;
+        const active = tab === t.id;
+        return (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{
+            ...btn, flex:1, padding:'10px 8px', borderRadius:22,
+            background: active ? T.stout : 'transparent',
+            color: active ? T.bg : T.inkSoft,
+            display:'flex', flexDirection:'column', alignItems:'center', gap:3,
+            transition:'all 220ms',
+          }}>
+            <I/>
+            <div style={{ fontSize:10, fontFamily:'JetBrains Mono, monospace', letterSpacing:'0.06em' }}>{t.label.toUpperCase()}</div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Root app ──────────────────────────────────────────────────────────────────
+
+function App() {
+  const [tweaks, setTweak] = usePersistedSettings('beer-settings', SETTINGS_DEFAULTS);
+  const T = THEMES[tweaks.theme] || THEMES.forest;
+
+  const [categories, setCategories] = usePersisted('beer-categories', CATEGORY_PRESETS);
+  const [log, setLog] = usePersistedLog();
+
+  const [tab, setTab]               = useState('today');
+  const [addOpen, setAddOpen]       = useState(false);
+  const [settingsOpen, setSettings] = useState(false);
+
+  const addCategory = ({ name, sub, swatch }) => {
+    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Date.now().toString(36).slice(-3);
+    setCategories(prev => [...prev, { id, name, sub: sub || 'Custom', swatch }]);
+  };
+
+  useEffect(() => {
+    document.body.style.background = T === THEMES.night ? '#060d06' : '#243320';
+  }, [T]);
+
+  return (
+    <div style={{ position:'relative', width:'100%', height:'100%', background:T.bg, overflow:'hidden' }}>
+      {/* Subtle radial gradient texture */}
+      <div style={{ position:'absolute', inset:0, background:`radial-gradient(circle at 50% 0%, ${T.cardSoft} 0%, ${T.bg} 60%)`, pointerEvents:'none' }}/>
+      {/* Pine silhouettes */}
+      <div style={{ position:'absolute', bottom:0, left:0, right:0, height:60, pointerEvents:'none', opacity:0.06, overflow:'hidden' }}>
+        {[8,28,52,72,90,110,130,150,175,195,215,240,260,280,300,320,345,370].map((x, i) => (
+          <div key={i} style={{
+            position:'absolute', bottom:0, left:x,
+            width: i%3===0 ? 18 : i%3===1 ? 14 : 16,
+            height: i%3===0 ? 52 : i%3===1 ? 44 : 48,
+            background:T.stout, clipPath:'polygon(50% 0%, 100% 100%, 0% 100%)',
+          }}/>
+        ))}
+      </div>
+
+      {/* Scrollable screen content */}
+      <div style={{ position:'relative', height:'100%', overflow:'auto', WebkitOverflowScrolling:'touch' }} key={tab}>
+        {tab==='today' && <TodayScreen T={T} log={log} categories={categories} setLog={setLog} tweaks={tweaks} openAdd={() => setAddOpen(true)} openSettings={() => setSettings(true)}/>}
+        {tab==='log'   && <LogScreen   T={T} log={log} categories={categories} setLog={setLog} tweaks={tweaks} openSettings={() => setSettings(true)}/>}
+        {tab==='stats' && <StatsScreen T={T} log={log} categories={categories} tweaks={tweaks} openSettings={() => setSettings(true)}/>}
+      </div>
+
+      <TabBar T={T} tab={tab} setTab={setTab}/>
+      <AddSheet T={T} open={addOpen} onClose={() => setAddOpen(false)} onSave={addCategory}/>
+      <SettingsSheet T={T} open={settingsOpen} onClose={() => setSettings(false)} tweaks={tweaks} setTweak={setTweak}/>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js')
+      .catch(err => console.warn('SW registration failed:', err));
+  });
+}
+</script>
+</body>
+</html>

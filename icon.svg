@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#243320"/>
+  <!-- Glass body -->
+  <rect x="148" y="196" width="184" height="220" rx="14" fill="#d4912e"/>
+  <!-- Foam cap -->
+  <rect x="148" y="196" width="184" height="68" rx="14" fill="#f0e3b5"/>
+  <!-- Foam bubbles -->
+  <circle cx="200" cy="218" r="14" fill="#fff" opacity="0.7"/>
+  <circle cx="240" cy="206" r="18" fill="#fff" opacity="0.65"/>
+  <circle cx="280" cy="215" r="14" fill="#fff" opacity="0.7"/>
+  <circle cx="312" cy="224" r="10" fill="#fff" opacity="0.6"/>
+  <!-- Handle -->
+  <path d="M332 240 Q390 240 390 278 Q390 316 332 316" fill="none" stroke="#d4912e" stroke-width="32" stroke-linecap="round"/>
+  <!-- Glass shine -->
+  <rect x="172" y="220" width="14" height="176" rx="7" fill="rgba(255,255,255,0.18)"/>
+</svg>
