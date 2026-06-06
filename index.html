@@ -34,6 +34,7 @@
   }
   button { font-family: inherit; }
   input { font-family: inherit; }
+  select { font-family: inherit; }
   ::-webkit-scrollbar { display: none; }
   * { scrollbar-width: none; }
 </style>
@@ -136,21 +137,75 @@ const THEMES = {
   },
 };
 
-const CATEGORY_PRESETS = [
-  { id: 'ipa',     name: 'IPA',     swatch: '#d4912e', sub: 'Hoppy' },
-  { id: 'pilsner', name: 'Pilsner', swatch: '#e8c259', sub: 'Crisp' },
-  { id: 'stout',   name: 'Stout',   swatch: '#2a1409', sub: 'Roasty' },
-  { id: 'sour',    name: 'Sour',    swatch: '#c66a55', sub: 'Tart' },
-  { id: 'lager',   name: 'Lager',   swatch: '#cb9540', sub: 'Clean' },
-  { id: 'wheat',   name: 'Wheat',   swatch: '#e2cf86', sub: 'Soft' },
+// ── Drink categories ──────────────────────────────────────────────────────────
+// defaultAbv: %, servingOz: fluid oz per standard serving
+
+const DRINK_CATEGORIES = [
+  { id: 'beer',     name: 'Beer',         defaultAbv: 5,   servingOz: 12  },
+  { id: 'cider',    name: 'Cider',        defaultAbv: 5,   servingOz: 12  },
+  { id: 'seltzer',  name: 'Hard Seltzer', defaultAbv: 5,   servingOz: 12  },
+  { id: 'wine',     name: 'Wine',         defaultAbv: 12,  servingOz: 5   },
+  { id: 'spirits',  name: 'Spirits',      defaultAbv: 40,  servingOz: 1.5 },
+  { id: 'mixed',    name: 'Mixed Drink',  defaultAbv: 10,  servingOz: 4   },
+  { id: 'other',    name: 'Other',        defaultAbv: 5,   servingOz: 12  },
 ];
+
+// No default drink types — user adds their own
+const CATEGORY_PRESETS = [];
 
 const SETTINGS_DEFAULTS = {
   theme: 'forest',
-  unit: 'beers',
+  unit: 'drinks',
   weeklyGoal: 14,
   showNotes: true,
+  weightLbs: 160,
+  gender: 'male',
 };
+
+// ── BAC estimation (Widmark formula) ─────────────────────────────────────────
+
+function getDrinkCat(dc) {
+  return DRINK_CATEGORIES.find(d => d.id === dc) || DRINK_CATEGORIES[0];
+}
+
+function calcBAC(todayEntries, drinkTypes, weightLbs, gender) {
+  if (!todayEntries.length || !weightLbs) return null;
+  const r = gender === 'female' ? 0.66 : 0.73;
+  const now = Date.now();
+  let bac = 0;
+  todayEntries.forEach(e => {
+    const dt = drinkTypes.find(c => c.id === e.categoryId);
+    if (!dt) return;
+    const dc = getDrinkCat(dt.drinkCategory);
+    const abv = (dt.abv != null && dt.abv !== '') ? Number(dt.abv) : dc.defaultAbv;
+    const ozAlcohol = dc.servingOz * (abv / 100);
+    const hoursAgo = (now - e.time.getTime()) / 3600000;
+    const contribution = (ozAlcohol * 5.14 / (weightLbs * r)) - (0.015 * hoursAgo);
+    bac += Math.max(0, contribution);
+  });
+  return Math.max(0, bac);
+}
+
+function bacColor(bac) {
+  if (bac < 0.04) return '#3d7a52';
+  if (bac < 0.08) return '#c8912e';
+  return '#c14a3a';
+}
+
+function bacLabel(bac) {
+  if (bac < 0.02) return 'Sober';
+  if (bac < 0.04) return 'Very light';
+  if (bac < 0.06) return 'Relaxed';
+  if (bac < 0.08) return 'Mild impairment';
+  if (bac < 0.10) return 'Near legal limit';
+  if (bac < 0.15) return 'Impaired';
+  return 'Heavily impaired';
+}
+
+function hoursToSober(bac) {
+  if (bac <= 0) return 0;
+  return bac / 0.015;
+}
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -179,6 +234,13 @@ const WEEKNAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','
 function fmtDay(d) {
   return `${WEEKNAMES[d.getDay()]}, ${MONTHS[d.getMonth()]} ${d.getDate()}`;
 }
+function fmtHours(h) {
+  if (h < 0.1) return '< 6 min';
+  if (h < 1) return `${Math.round(h * 60)} min`;
+  const hrs = Math.floor(h);
+  const mins = Math.round((h - hrs) * 60);
+  return mins ? `${hrs}h ${mins}m` : `${hrs}h`;
+}
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 
@@ -190,6 +252,7 @@ const Icon = {
   Log:      (p) => <svg width="20" height="20" viewBox="0 0 20 20" fill="none" {...p}><path d="M4 5h12M4 10h12M4 15h8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>,
   Stats:    (p) => <svg width="20" height="20" viewBox="0 0 20 20" fill="none" {...p}><path d="M4 16V9M10 16V4M16 16v-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>,
   Settings: (p) => <svg width="18" height="18" viewBox="0 0 18 18" fill="none" {...p}><circle cx="9" cy="9" r="2.2" stroke="currentColor" strokeWidth="1.4"/><circle cx="9" cy="9" r="6" stroke="currentColor" strokeWidth="1.4" strokeDasharray="1.6 2"/></svg>,
+  Drop:     (p) => <svg width="18" height="18" viewBox="0 0 18 18" fill="none" {...p}><path d="M9 3C9 3 4 8.5 4 11.5a5 5 0 0010 0C14 8.5 9 3 9 3z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/></svg>,
 };
 
 // ── Shared style ──────────────────────────────────────────────────────────────
@@ -211,7 +274,7 @@ function MountainDeco({ T }) {
   );
 }
 
-function BeerGlyph({ color, size = 40 }) {
+function DrinkGlyph({ color, size = 40 }) {
   return (
     <div style={{
       width:size, height:size, borderRadius:size/2, background:color,
@@ -256,11 +319,18 @@ function CountFlip({ value }) {
 }
 
 function LogRow({ entry, cat, T, isLast, showNotes }) {
+  const dc = cat ? getDrinkCat(cat.drinkCategory) : null;
   return (
     <div style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 14px', borderBottom: isLast ? 'none' : `1px solid ${T.line}` }}>
       <div style={{ width:8, height:8, borderRadius:'50%', background:cat?.swatch || T.accent, flexShrink:0 }}/>
       <div style={{ flex:1, minWidth:0 }}>
-        <div style={{ fontSize:13, color:T.ink, fontWeight:500 }}>{cat?.name || 'Beer'}</div>
+        <div style={{ fontSize:13, color:T.ink, fontWeight:500 }}>{cat?.name || 'Drink'}</div>
+        <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:1 }}>
+          {dc && <span style={{ fontFamily:'JetBrains Mono, monospace', fontSize:9, color:T.inkMuted, letterSpacing:'0.08em', textTransform:'uppercase' }}>{dc.name}</span>}
+          {cat?.abv != null && cat.abv !== '' && (
+            <span style={{ fontFamily:'JetBrains Mono, monospace', fontSize:9, color:T.inkMuted, letterSpacing:'0.06em' }}>{cat.abv}%</span>
+          )}
+        </div>
         {showNotes && entry.note && (
           <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:13, color:T.inkSoft, marginTop:1, lineHeight:1.2 }}>
             "{entry.note}"
@@ -295,6 +365,62 @@ function SwipeRow({ children, onRemove, T }) {
   );
 }
 
+// ── BAC Card ──────────────────────────────────────────────────────────────────
+
+function BACCard({ T, bac, openSettings }) {
+  if (bac === null) {
+    return (
+      <div style={{ margin:'0 18px', padding:'14px 16px', background:T.card, borderRadius:18, border:`1px solid ${T.line}`, display:'flex', alignItems:'center', justifyContent:'space-between', gap:12 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <Icon.Drop style={{ color:T.inkMuted }}/>
+          <div>
+            <div style={{ fontSize:12, color:T.ink, fontWeight:500 }}>BAC Estimator</div>
+            <div style={{ fontSize:11, color:T.inkMuted, marginTop:1 }}>Set weight & gender in settings</div>
+          </div>
+        </div>
+        <button onClick={openSettings} style={{ ...btn, fontSize:11, padding:'5px 10px', borderRadius:999, background:'transparent', color:T.inkSoft, border:`1px solid ${T.line}`, fontFamily:'JetBrains Mono, monospace', letterSpacing:'0.06em' }}>
+          SETUP
+        </button>
+      </div>
+    );
+  }
+
+  const color = bacColor(bac);
+  const toSober = hoursToSober(bac);
+  const pct = Math.min(bac / 0.15, 1);
+
+  return (
+    <div style={{ margin:'0 18px', padding:'14px 16px', background:T.card, borderRadius:18, border:`1px solid ${T.line}` }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <Icon.Drop style={{ color }}/>
+          <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, color:T.inkMuted, letterSpacing:'0.10em', textTransform:'uppercase' }}>BAC Estimate</div>
+        </div>
+        <div style={{ display:'flex', alignItems:'baseline', gap:6 }}>
+          <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:28, color, lineHeight:1 }}>
+            {bac.toFixed(3)}
+          </div>
+          <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, color:T.inkMuted }}>g/dL</div>
+        </div>
+      </div>
+      <div style={{ height:5, borderRadius:3, background:T.bgDeep, overflow:'hidden', marginBottom:8 }}>
+        <div style={{ width:`${pct*100}%`, height:'100%', background:color, borderRadius:3, transition:'width 400ms cubic-bezier(.4,1.4,.5,1)' }}/>
+      </div>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+        <div style={{ fontSize:11, color, fontWeight:500 }}>{bacLabel(bac)}</div>
+        {toSober > 0.05 && (
+          <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, color:T.inkMuted, letterSpacing:'0.06em' }}>
+            CLEARS IN ~{fmtHours(toSober)}
+          </div>
+        )}
+      </div>
+      <div style={{ fontSize:10, color:T.inkMuted, marginTop:6, fontStyle:'italic' }}>
+        Estimate only. Never drive based on this reading.
+      </div>
+    </div>
+  );
+}
+
 // ── Today screen ──────────────────────────────────────────────────────────────
 
 function TodayScreen({ T, log, categories, setLog, tweaks, openAdd, openSettings }) {
@@ -306,6 +432,11 @@ function TodayScreen({ T, log, categories, setLog, tweaks, openAdd, openSettings
   const pct       = Math.min(weekTotal / goal, 1);
 
   const [pulse, setPulse] = useState(null);
+
+  const bac = useMemo(() => {
+    if (!tweaks.weightLbs) return null;
+    return calcBAC(todays, categories, tweaks.weightLbs, tweaks.gender);
+  }, [todays, categories, tweaks.weightLbs, tweaks.gender]);
 
   const incr = (cat) => {
     const entry = { id: 'l' + Date.now() + Math.random(), categoryId: cat.id, time: new Date(), note: '' };
@@ -369,42 +500,58 @@ function TodayScreen({ T, log, categories, setLog, tweaks, openAdd, openSettings
         )}
       </div>
 
+      {/* BAC card */}
+      <div style={{ marginTop:12 }}>
+        <BACCard T={T} bac={todays.length > 0 ? bac : 0} openSettings={openSettings}/>
+      </div>
+
       {/* Quick-add grid */}
       <div style={{ padding:'24px 18px 0' }}>
         <SectionLabel T={T}>Tap to add</SectionLabel>
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:10 }}>
-          {categories.map(cat => {
-            const count = todays.filter(e => e.categoryId === cat.id).length;
-            const pulsing = pulse === cat.id;
-            return (
-              <button key={cat.id} onClick={() => incr(cat)} style={{
-                ...btn, background:T.card, border:`1px solid ${T.line}`, borderRadius:20,
-                padding:'12px 14px', textAlign:'left', display:'flex', alignItems:'center', gap:12,
-                transform: pulsing ? 'scale(0.97)' : 'scale(1)',
-                boxShadow: pulsing ? `0 0 0 3px ${cat.swatch}33` : 'none',
-                transition:'transform 180ms cubic-bezier(.3,1.5,.5,1), box-shadow 180ms',
-                position:'relative', overflow:'hidden',
-              }}>
-                <BeerGlyph color={cat.swatch} size={36}/>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontWeight:500, fontSize:14, color:T.ink, lineHeight:1.1 }}>{cat.name}</div>
-                  <div style={{ fontSize:11, color:T.inkSoft, marginTop:2 }}>{cat.sub}</div>
-                </div>
-                <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:26, color: count ? T.stout : T.inkMuted, lineHeight:1 }}>
-                  {count || '·'}
-                </div>
-              </button>
-            );
-          })}
-          <button onClick={openAdd} style={{
-            ...btn, background:'transparent', border:`1.5px dashed ${T.line}`, borderRadius:20,
-            padding:'12px 14px', display:'flex', alignItems:'center', justifyContent:'center', gap:8,
-            color:T.inkSoft, gridColumn:'span 2', minHeight:52,
-          }}>
-            <Icon.Plus/>
-            <span style={{ fontSize:13 }}>New type</span>
-          </button>
-        </div>
+        {categories.length === 0 ? (
+          <div style={{ marginTop:12, padding:'28px 20px', textAlign:'center', background:T.card, borderRadius:20, border:`1.5px dashed ${T.line}` }}>
+            <div style={{ fontSize:13, color:T.inkSoft, lineHeight:1.5 }}>No drink types yet.</div>
+            <div style={{ fontSize:11, color:T.inkMuted, marginTop:4 }}>Tap "New drink type" to get started.</div>
+          </div>
+        ) : (
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:10 }}>
+            {categories.map(cat => {
+              const count = todays.filter(e => e.categoryId === cat.id).length;
+              const pulsing = pulse === cat.id;
+              const dc = getDrinkCat(cat.drinkCategory);
+              return (
+                <button key={cat.id} onClick={() => incr(cat)} style={{
+                  ...btn, background:T.card, border:`1px solid ${T.line}`, borderRadius:20,
+                  padding:'12px 14px', textAlign:'left', display:'flex', alignItems:'center', gap:12,
+                  transform: pulsing ? 'scale(0.97)' : 'scale(1)',
+                  boxShadow: pulsing ? `0 0 0 3px ${cat.swatch}33` : 'none',
+                  transition:'transform 180ms cubic-bezier(.3,1.5,.5,1), box-shadow 180ms',
+                  position:'relative', overflow:'hidden',
+                }}>
+                  <DrinkGlyph color={cat.swatch} size={36}/>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontWeight:500, fontSize:14, color:T.ink, lineHeight:1.1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{cat.name}</div>
+                    <div style={{ fontSize:10, color:T.inkSoft, marginTop:2, display:'flex', gap:4, alignItems:'center' }}>
+                      <span style={{ fontFamily:'JetBrains Mono, monospace', letterSpacing:'0.04em' }}>{dc.name}</span>
+                      {cat.abv != null && cat.abv !== '' && <span style={{ fontFamily:'JetBrains Mono, monospace', opacity:0.7 }}>{cat.abv}%</span>}
+                    </div>
+                  </div>
+                  <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:26, color: count ? T.stout : T.inkMuted, lineHeight:1 }}>
+                    {count || '·'}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <button onClick={openAdd} style={{
+          ...btn, background:'transparent', border:`1.5px dashed ${T.line}`, borderRadius:20,
+          padding:'12px 14px', display:'flex', alignItems:'center', justifyContent:'center', gap:8,
+          color:T.inkSoft, width:'100%', minHeight:52, marginTop:10,
+        }}>
+          <Icon.Plus/>
+          <span style={{ fontSize:13 }}>New drink type</span>
+        </button>
       </div>
 
       {/* Today inline preview */}
@@ -448,7 +595,7 @@ function LogScreen({ T, log, categories, setLog, tweaks, openSettings }) {
         <div>
           <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:28, lineHeight:1, letterSpacing:'-0.01em' }}>The log</div>
           <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:11, color:T.inkSoft, marginTop:4, letterSpacing:'0.04em' }}>
-            {log.length} POURS · ALL TIME
+            {log.length} DRINKS · ALL TIME
           </div>
         </div>
         <button onClick={openSettings} style={{
@@ -460,7 +607,7 @@ function LogScreen({ T, log, categories, setLog, tweaks, openSettings }) {
 
       {groups.length === 0 && (
         <div style={{ padding:'60px 40px', textAlign:'center', color:T.inkMuted, fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:18, lineHeight:1.5 }}>
-          No pours logged yet.<br/>Tap a beer type on Today to get started.
+          No drinks logged yet.<br/>Tap a drink type on Today to get started.
         </div>
       )}
 
@@ -489,11 +636,98 @@ function LogScreen({ T, log, categories, setLog, tweaks, openSettings }) {
   );
 }
 
+// ── Category breakdown component ──────────────────────────────────────────────
+
+function CategoryBreakdown({ T, entries, drinkTypes, label }) {
+  const breakdown = useMemo(() => {
+    const counts = {};
+    entries.forEach(e => {
+      const dt = drinkTypes.find(c => c.id === e.categoryId);
+      const dcId = dt?.drinkCategory || 'other';
+      counts[dcId] = (counts[dcId] || 0) + 1;
+    });
+    return Object.entries(counts)
+      .map(([id, n]) => ({ dc: DRINK_CATEGORIES.find(d => d.id === id) || { id, name: id, defaultAbv:5, servingOz:12 }, n }))
+      .sort((a,b) => b.n - a.n);
+  }, [entries, drinkTypes]);
+
+  if (!breakdown.length) return null;
+
+  const SWATCHES = {
+    beer: '#d4912e', cider: '#c8a832', seltzer: '#7ab8d4',
+    wine: '#8b3a5a', spirits: '#b06020', mixed: '#4a8a7a', other: '#8a8a8a',
+  };
+
+  return (
+    <div style={{ margin:'18px 18px 0', padding:'18px 18px 14px', background:T.card, borderRadius:22, border:`1px solid ${T.line}` }}>
+      <SectionLabel T={T}>{label}</SectionLabel>
+      <div style={{ marginTop:14, display:'flex', flexDirection:'column', gap:12 }}>
+        {breakdown.map(({ dc, n }) => {
+          const swatch = SWATCHES[dc.id] || T.accent;
+          return (
+            <div key={dc.id}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:4 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                  <div style={{ width:8, height:8, borderRadius:'50%', background:swatch }}/>
+                  <div style={{ fontSize:13, color:T.ink }}>{dc.name}</div>
+                </div>
+                <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:18, color:T.stout, lineHeight:1 }}>{n}</div>
+              </div>
+              <div style={{ height:4, borderRadius:2, background:T.bgDeep, overflow:'hidden' }}>
+                <div style={{ width:`${(n/breakdown[0].n)*100}%`, height:'100%', background:swatch, borderRadius:2, transition:'width 400ms' }}/>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Drink type breakdown component ────────────────────────────────────────────
+
+function DrinkTypeBreakdown({ T, entries, drinkTypes, label }) {
+  const breakdown = useMemo(() => {
+    const counts = {};
+    entries.forEach(e => { counts[e.categoryId] = (counts[e.categoryId] || 0) + 1; });
+    return Object.entries(counts)
+      .map(([id, n]) => ({ cat: drinkTypes.find(c => c.id === id), n }))
+      .filter(x => x.cat)
+      .sort((a,b) => b.n - a.n);
+  }, [entries, drinkTypes]);
+
+  if (!breakdown.length) return null;
+
+  return (
+    <div style={{ margin:'18px 18px 0', padding:'18px 18px 14px', background:T.card, borderRadius:22, border:`1px solid ${T.line}` }}>
+      <SectionLabel T={T}>{label}</SectionLabel>
+      <div style={{ marginTop:14, display:'flex', flexDirection:'column', gap:12 }}>
+        {breakdown.map(({ cat, n }) => (
+          <div key={cat.id}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:4 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <div style={{ width:8, height:8, borderRadius:'50%', background:cat.swatch }}/>
+                <div style={{ fontSize:13, color:T.ink }}>{cat.name}</div>
+              </div>
+              <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:18, color:T.stout, lineHeight:1 }}>{n}</div>
+            </div>
+            <div style={{ height:4, borderRadius:2, background:T.bgDeep, overflow:'hidden' }}>
+              <div style={{ width:`${(n/breakdown[0].n)*100}%`, height:'100%', background:cat.swatch, borderRadius:2 }}/>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Stats screen ──────────────────────────────────────────────────────────────
 
 function StatsScreen({ T, log, categories, tweaks, openSettings }) {
   const now = new Date();
+  const [view, setView] = useState('weekly');
 
+  // ── Weekly data ────────────────────────────────────────
   const days = useMemo(() => {
     const n = new Date();
     return Array.from({ length:7 }, (_, i) => {
@@ -505,17 +739,9 @@ function StatsScreen({ T, log, categories, tweaks, openSettings }) {
 
   const maxCount  = Math.max(1, ...days.map(d => d.count));
   const weekTotal = days.reduce((s,d) => s+d.count, 0);
+  const weekStart = startOfWeek(now);
 
-  const typeBreakdown = useMemo(() => {
-    const weekStart = startOfWeek(new Date());
-    const counts = {};
-    log.forEach(e => {
-      if (e.time >= weekStart) counts[e.categoryId] = (counts[e.categoryId] || 0) + 1;
-    });
-    return Object.entries(counts).map(([id, n]) => ({
-      cat: categories.find(c => c.id === id), n,
-    })).filter(x => x.cat).sort((a,b) => b.n-a.n);
-  }, [log, categories]);
+  const weekEntries = useMemo(() => log.filter(e => e.time >= weekStart), [log]);
 
   const streak = useMemo(() => {
     const n = new Date();
@@ -529,7 +755,24 @@ function StatsScreen({ T, log, categories, tweaks, openSettings }) {
     return s;
   }, [log]);
 
-  const weekStart = startOfWeek(now);
+  // ── Daily data ─────────────────────────────────────────
+  const todayEntries = useMemo(() => log.filter(e => isSameDay(e.time, now)), [log]);
+
+  const hourlyData = useMemo(() => {
+    return Array.from({ length:24 }, (_, h) => ({
+      hour: h,
+      count: todayEntries.filter(e => e.time.getHours() === h).length,
+      label: h === 0 ? '12a' : h < 12 ? `${h}a` : h === 12 ? '12p' : `${h-12}p`,
+    }));
+  }, [todayEntries]);
+
+  const activeHours = hourlyData.filter(h => h.count > 0);
+  const maxHour = Math.max(1, ...hourlyData.map(h => h.count));
+
+  const todayBac = useMemo(() => {
+    if (!tweaks.weightLbs) return null;
+    return calcBAC(todayEntries, categories, tweaks.weightLbs, tweaks.gender);
+  }, [todayEntries, categories, tweaks]);
 
   return (
     <div style={{ padding:'0 0 130px', paddingTop:'max(64px, calc(env(safe-area-inset-top) + 10px))', color:T.ink }}>
@@ -537,7 +780,9 @@ function StatsScreen({ T, log, categories, tweaks, openSettings }) {
         <div>
           <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:28, lineHeight:1, letterSpacing:'-0.01em' }}>By the numbers</div>
           <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:11, color:T.inkSoft, marginTop:4, letterSpacing:'0.04em' }}>
-            WEEK OF {MONTHS[weekStart.getMonth()].toUpperCase()} {weekStart.getDate()}
+            {view === 'weekly'
+              ? `WEEK OF ${MONTHS[weekStart.getMonth()].toUpperCase()} ${weekStart.getDate()}`
+              : `TODAY · ${MONTHS[now.getMonth()].toUpperCase()} ${now.getDate()}`}
           </div>
         </div>
         <button onClick={openSettings} style={{
@@ -547,60 +792,120 @@ function StatsScreen({ T, log, categories, tweaks, openSettings }) {
         }}><Icon.Settings/></button>
       </div>
 
-      <div style={{ padding:'0 18px', display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-        <StatCard T={T} value={weekTotal} label="this week" sub={tweaks.weeklyGoal - weekTotal > 0 ? `${tweaks.weeklyGoal - weekTotal} to goal` : 'goal hit'}/>
-        <StatCard T={T} value={streak} label={`day${streak === 1 ? '' : 's'} streak`} sub={streak >= 3 ? 'on a roll' : 'just started'} accent/>
+      {/* Weekly / Daily toggle */}
+      <div style={{ margin:'0 18px 4px', display:'flex', background:T.bgDeep, borderRadius:14, padding:3, border:`1px solid ${T.line}` }}>
+        {['weekly','daily'].map(v => {
+          const active = view === v;
+          return (
+            <button key={v} onClick={() => setView(v)} style={{
+              ...btn, flex:1, padding:'9px 8px', borderRadius:11,
+              background: active ? T.card : 'transparent',
+              color: active ? T.ink : T.inkSoft,
+              fontSize:12, fontWeight: active ? 600 : 400,
+              fontFamily:'JetBrains Mono, monospace', letterSpacing:'0.08em', textTransform:'uppercase',
+              boxShadow: active ? '0 1px 4px rgba(0,0,0,0.10)' : 'none',
+              transition:'all 200ms',
+            }}>{v}</button>
+          );
+        })}
       </div>
 
-      <div style={{ margin:'18px 18px 0', padding:'18px 18px 16px', background:T.card, borderRadius:22, border:`1px solid ${T.line}` }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:16 }}>
-          <SectionLabel T={T}>Last 7 days</SectionLabel>
-          <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, color:T.inkMuted, letterSpacing:'0.06em' }}>
-            AVG {(weekTotal/7).toFixed(1)}/DAY
+      {view === 'weekly' && (
+        <>
+          <div style={{ padding:'14px 18px 0', display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+            <StatCard T={T} value={weekTotal} label="this week" sub={tweaks.weeklyGoal - weekTotal > 0 ? `${tweaks.weeklyGoal - weekTotal} to goal` : 'goal hit'}/>
+            <StatCard T={T} value={streak} label={`day${streak === 1 ? '' : 's'} streak`} sub={streak >= 3 ? 'on a roll' : 'just started'} accent/>
           </div>
-        </div>
-        <div style={{ display:'flex', alignItems:'flex-end', gap:8, height:140 }}>
-          {days.map((d, i) => {
-            const h = (d.count / maxCount) * 96;
-            const isToday = isSameDay(d.date, now);
-            return (
-              <div key={i} style={{ flex:1, height:'100%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'flex-end', gap:6 }}>
-                <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, color: d.count ? T.ink : T.inkMuted, height:14, lineHeight:'14px' }}>{d.count || ''}</div>
-                <div style={{
-                  width:'100%', height: d.count === 0 ? 3 : Math.max(h, 8),
-                  background: d.count === 0 ? T.bgDeep : (isToday ? T.accent : T.accentDeep),
-                  borderRadius:6, opacity: d.count === 0 ? 0.5 : 1,
-                  transition:'height 400ms cubic-bezier(.3,1,.4,1)',
-                }}/>
-                <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, color: isToday ? T.ink : T.inkMuted, fontWeight: isToday ? 600 : 400, height:14, lineHeight:'14px' }}>
-                  {d.label[0]}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
 
-      {typeBreakdown.length > 0 && (
-        <div style={{ margin:'18px 18px 0', padding:'18px 18px 14px', background:T.card, borderRadius:22, border:`1px solid ${T.line}` }}>
-          <SectionLabel T={T}>Top of the week</SectionLabel>
-          <div style={{ marginTop:14, display:'flex', flexDirection:'column', gap:12 }}>
-            {typeBreakdown.map(({ cat, n }) => (
-              <div key={cat.id}>
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:4 }}>
-                  <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                    <div style={{ width:8, height:8, borderRadius:'50%', background:cat.swatch }}/>
-                    <div style={{ fontSize:13, color:T.ink }}>{cat.name}</div>
+          <div style={{ margin:'18px 18px 0', padding:'18px 18px 16px', background:T.card, borderRadius:22, border:`1px solid ${T.line}` }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:16 }}>
+              <SectionLabel T={T}>Last 7 days</SectionLabel>
+              <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, color:T.inkMuted, letterSpacing:'0.06em' }}>
+                AVG {(weekTotal/7).toFixed(1)}/DAY
+              </div>
+            </div>
+            <div style={{ display:'flex', alignItems:'flex-end', gap:8, height:140 }}>
+              {days.map((d, i) => {
+                const h = (d.count / maxCount) * 96;
+                const isToday = isSameDay(d.date, now);
+                return (
+                  <div key={i} style={{ flex:1, height:'100%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'flex-end', gap:6 }}>
+                    <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, color: d.count ? T.ink : T.inkMuted, height:14, lineHeight:'14px' }}>{d.count || ''}</div>
+                    <div style={{
+                      width:'100%', height: d.count === 0 ? 3 : Math.max(h, 8),
+                      background: d.count === 0 ? T.bgDeep : (isToday ? T.accent : T.accentDeep),
+                      borderRadius:6, opacity: d.count === 0 ? 0.5 : 1,
+                      transition:'height 400ms cubic-bezier(.3,1,.4,1)',
+                    }}/>
+                    <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, color: isToday ? T.ink : T.inkMuted, fontWeight: isToday ? 600 : 400, height:14, lineHeight:'14px' }}>
+                      {d.label[0]}
+                    </div>
                   </div>
-                  <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:18, color:T.stout, lineHeight:1 }}>{n}</div>
+                );
+              })}
+            </div>
+          </div>
+
+          <CategoryBreakdown T={T} entries={weekEntries} drinkTypes={categories} label="By category this week"/>
+          <DrinkTypeBreakdown T={T} entries={weekEntries} drinkTypes={categories} label="Top drinks this week"/>
+        </>
+      )}
+
+      {view === 'daily' && (
+        <>
+          <div style={{ padding:'14px 18px 0', display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+            <StatCard T={T} value={todayEntries.length} label="today" sub={tweaks.weeklyGoal - weekTotal > 0 ? `${tweaks.weeklyGoal - weekTotal} to wk goal` : 'week goal hit'}/>
+            {todayBac !== null
+              ? <div style={{ background:T.stout, color:T.bg, borderRadius:22, padding:'16px 16px 14px', position:'relative', overflow:'hidden', minHeight:100 }}>
+                  <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:42, lineHeight:0.9, letterSpacing:'-0.03em', color:bacColor(todayBac) }}>{todayBac.toFixed(3)}</div>
+                  <div style={{ fontSize:12, marginTop:4, opacity:0.9 }}>est. BAC</div>
+                  <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, letterSpacing:'0.08em', marginTop:6, opacity:0.55, textTransform:'uppercase' }}>{bacLabel(todayBac)}</div>
                 </div>
-                <div style={{ height:4, borderRadius:2, background:T.bgDeep, overflow:'hidden' }}>
-                  <div style={{ width:`${(n/typeBreakdown[0].n)*100}%`, height:'100%', background:cat.swatch, borderRadius:2 }}/>
+              : <StatCard T={T} value={streak} label={`day${streak===1?'':'s'} streak`} sub={streak>=3?'on a roll':'just started'} accent/>
+            }
+          </div>
+
+          {todayEntries.length > 0 && activeHours.length > 0 && (
+            <div style={{ margin:'18px 18px 0', padding:'18px 18px 16px', background:T.card, borderRadius:22, border:`1px solid ${T.line}` }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:16 }}>
+                <SectionLabel T={T}>Drinks by hour</SectionLabel>
+                <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, color:T.inkMuted, letterSpacing:'0.06em' }}>
+                  {todayEntries.length} TOTAL
                 </div>
               </div>
-            ))}
-          </div>
-        </div>
+              <div style={{ display:'flex', alignItems:'flex-end', gap:4, height:100, overflowX:'auto' }}>
+                {hourlyData.filter((_, i) => {
+                  const minH = Math.max(0, Math.min(...activeHours.map(h=>h.hour)) - 1);
+                  const maxH = Math.min(23, Math.max(...activeHours.map(h=>h.hour)) + 1);
+                  return i >= minH && i <= maxH;
+                }).map((d, i) => {
+                  const h = (d.count / maxHour) * 68;
+                  return (
+                    <div key={i} style={{ flex:1, minWidth:24, height:'100%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'flex-end', gap:4 }}>
+                      <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:9, color: d.count ? T.ink : T.inkMuted, height:12, lineHeight:'12px' }}>{d.count || ''}</div>
+                      <div style={{
+                        width:'100%', height: d.count === 0 ? 3 : Math.max(h, 6),
+                        background: d.count === 0 ? T.bgDeep : T.accent,
+                        borderRadius:4, opacity: d.count === 0 ? 0.4 : 1,
+                        transition:'height 400ms',
+                      }}/>
+                      <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:9, color:T.inkMuted, height:12, lineHeight:'12px', whiteSpace:'nowrap' }}>{d.label}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <CategoryBreakdown T={T} entries={todayEntries} drinkTypes={categories} label="By category today"/>
+          <DrinkTypeBreakdown T={T} entries={todayEntries} drinkTypes={categories} label="Drinks today"/>
+
+          {todayEntries.length === 0 && (
+            <div style={{ padding:'60px 40px', textAlign:'center', color:T.inkMuted, fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:18, lineHeight:1.5 }}>
+              Nothing logged today yet.
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -629,9 +934,15 @@ const THEME_OPTIONS = [
   { value:'night',   label:'Night Camp',  swatches:['#5eb87a','#101910','#d4e8c8'] },
   { value:'autumn',  label:'Autumn Trail',swatches:['#7a5c2a','#ede6da','#221608'] },
 ];
-const UNIT_OPTIONS = ['beers','pints','cans'];
+const UNIT_OPTIONS = ['drinks','beers','pints','cans'];
 
 function SettingsSheet({ T, open, onClose, tweaks, setTweak }) {
+  const inputStyle = {
+    width:'100%', padding:'10px 14px', borderRadius:12,
+    background:T.card, border:`1px solid ${T.line}`,
+    fontSize:15, color:T.ink, outline:'none', fontFamily:'inherit',
+  };
+
   return (
     <>
       <div onClick={onClose} style={{
@@ -647,6 +958,7 @@ function SettingsSheet({ T, open, onClose, tweaks, setTweak }) {
         transform: open ? 'translateY(0)' : 'translateY(105%)',
         transition:'transform 320ms cubic-bezier(.3,1,.4,1)',
         zIndex:41, boxShadow:'0 -10px 40px rgba(10,20,8,0.22)',
+        overflowY:'auto', maxHeight:'90vh',
       }}>
         <div style={{ width:38, height:4, borderRadius:2, background:T.inkMuted, margin:'4px auto 16px', opacity:0.45 }}/>
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
@@ -679,16 +991,16 @@ function SettingsSheet({ T, open, onClose, tweaks, setTweak }) {
           })}
         </div>
 
-        <SettingsLabel T={T}>Unit</SettingsLabel>
+        <SettingsLabel T={T}>Unit label</SettingsLabel>
         <div style={{ display:'flex', gap:0, marginTop:8, marginBottom:20, background:T.bgDeep, borderRadius:14, padding:3, border:`1px solid ${T.line}` }}>
           {UNIT_OPTIONS.map(u => {
             const active = tweaks.unit === u;
             return (
               <button key={u} onClick={() => setTweak('unit', u)} style={{
-                ...btn, flex:1, padding:'10px 8px', borderRadius:11,
+                ...btn, flex:1, padding:'10px 4px', borderRadius:11,
                 background: active ? T.card : 'transparent',
                 color: active ? T.ink : T.inkSoft,
-                fontSize:13, fontWeight: active ? 500 : 400,
+                fontSize:12, fontWeight: active ? 500 : 400,
                 boxShadow: active ? '0 1px 4px rgba(0,0,0,0.10)' : 'none',
                 border:'none', transition:'all 200ms',
               }}>{u}</button>
@@ -716,7 +1028,40 @@ function SettingsSheet({ T, open, onClose, tweaks, setTweak }) {
           }}><Icon.Plus/></button>
         </div>
 
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'14px 16px', background:T.card, borderRadius:16, border:`1px solid ${T.line}` }}>
+        {/* BAC settings */}
+        <SettingsLabel T={T}>BAC estimator</SettingsLabel>
+        <div style={{ marginTop:8, marginBottom:8 }}>
+          <div style={{ fontSize:11, color:T.inkMuted, marginBottom:10, paddingLeft:2 }}>
+            Used to estimate blood alcohol. Your data stays on device.
+          </div>
+          <div style={{ display:'flex', gap:10, marginBottom:12 }}>
+            {['male','female'].map(g => {
+              const active = tweaks.gender === g;
+              return (
+                <button key={g} onClick={() => setTweak('gender', g)} style={{
+                  ...btn, flex:1, padding:'10px 8px', borderRadius:12,
+                  background: active ? T.stout : T.card,
+                  color: active ? T.bg : T.inkSoft,
+                  border:`1px solid ${active ? T.stout : T.line}`,
+                  fontSize:13, fontWeight: active ? 500 : 400, transition:'all 200ms',
+                }}>{g.charAt(0).toUpperCase() + g.slice(1)}</button>
+              );
+            })}
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <input
+              type="number"
+              value={tweaks.weightLbs}
+              onChange={e => setTweak('weightLbs', Number(e.target.value))}
+              placeholder="160"
+              min="50" max="500"
+              style={{ ...inputStyle, flex:1 }}
+            />
+            <div style={{ fontFamily:'JetBrains Mono, monospace', fontSize:12, color:T.inkMuted, whiteSpace:'nowrap' }}>lbs</div>
+          </div>
+        </div>
+
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'14px 16px', background:T.card, borderRadius:16, border:`1px solid ${T.line}`, marginTop:12, marginBottom:4 }}>
           <div>
             <div style={{ fontSize:14, color:T.ink, fontWeight:500 }}>Show pour notes</div>
             <div style={{ fontSize:11, color:T.inkSoft, marginTop:2 }}>Display notes in the log</div>
@@ -750,16 +1095,42 @@ function SettingsLabel({ T, children }) {
 const SWATCH_OPTIONS = [
   '#d4912e','#e8c259','#2a1409','#c66a55','#cb9540','#e2cf86',
   '#7d3e2a','#a05c33','#d97049','#6b8e4e','#3a5a72','#8c5fb1',
+  '#8b3a5a','#4a8a7a','#7ab8d4','#b06020','#8a8a8a','#c14a3a',
 ];
 
 function AddSheet({ T, open, onClose, onSave }) {
-  const [name, setName]   = useState('');
-  const [sub, setSub]     = useState('');
-  const [color, setColor] = useState(SWATCH_OPTIONS[0]);
+  const [name, setName]       = useState('');
+  const [drinkCat, setDrinkCat] = useState('beer');
+  const [abv, setAbv]         = useState('');
+  const [note, setNote]       = useState('');
+  const [color, setColor]     = useState(SWATCH_OPTIONS[0]);
+
   useEffect(() => {
-    if (open) { setName(''); setSub(''); setColor(SWATCH_OPTIONS[Math.floor(Math.random()*SWATCH_OPTIONS.length)]); }
+    if (open) {
+      setName(''); setDrinkCat('beer'); setAbv(''); setNote('');
+      setColor(SWATCH_OPTIONS[Math.floor(Math.random()*SWATCH_OPTIONS.length)]);
+    }
   }, [open]);
+
   const canSave = name.trim().length > 0;
+  const selectedDC = DRINK_CATEGORIES.find(d => d.id === drinkCat) || DRINK_CATEGORIES[0];
+
+  const inputStyle = {
+    width:'100%', padding:'12px 14px', borderRadius:14,
+    background:T.card, border:`1px solid ${T.line}`,
+    fontSize:15, color:T.ink, outline:'none', fontFamily:'inherit',
+    WebkitAppearance:'none',
+  };
+
+  const selectStyle = {
+    ...inputStyle,
+    appearance:'none', WebkitAppearance:'none',
+    backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23888' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E")`,
+    backgroundRepeat:'no-repeat',
+    backgroundPosition:'right 14px center',
+    paddingRight:36,
+    cursor:'pointer',
+  };
 
   return (
     <>
@@ -776,39 +1147,80 @@ function AddSheet({ T, open, onClose, onSave }) {
         transform: open ? 'translateY(0)' : 'translateY(100%)',
         transition:'transform 320ms cubic-bezier(.3,1,.4,1)',
         zIndex:31, boxShadow:'0 -10px 30px rgba(20,12,4,0.18)',
+        overflowY:'auto', maxHeight:'90vh',
       }}>
         <div style={{ width:38, height:4, borderRadius:2, background:T.inkMuted, margin:'4px auto 14px', opacity:0.4 }}/>
         <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between' }}>
-          <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:24, color:T.ink, lineHeight:1 }}>New beer type</div>
+          <div style={{ fontFamily:'Instrument Serif, serif', fontStyle:'italic', fontSize:24, color:T.ink, lineHeight:1 }}>New drink type</div>
           <button onClick={onClose} style={{ ...btn, color:T.inkSoft, padding:6 }}><Icon.X/></button>
         </div>
 
+        {/* Preview */}
         <div style={{ marginTop:16, padding:'12px 14px', background:T.card, borderRadius:20, border:`1px solid ${T.line}`, display:'flex', alignItems:'center', gap:12 }}>
-          <BeerGlyph color={color} size={42}/>
+          <DrinkGlyph color={color} size={42}/>
           <div style={{ flex:1 }}>
             <div style={{ fontSize:14, fontWeight:500, color:T.ink }}>{name || 'Untitled'}</div>
-            <div style={{ fontSize:11, color:T.inkSoft }}>{sub || 'Tagline (optional)'}</div>
+            <div style={{ fontSize:11, color:T.inkSoft, display:'flex', gap:6, marginTop:2 }}>
+              <span>{selectedDC.name}</span>
+              {abv !== '' && <span style={{ fontFamily:'JetBrains Mono, monospace' }}>{abv}%</span>}
+            </div>
           </div>
         </div>
 
+        {/* Drink category */}
         <div style={{ marginTop:18 }}>
-          <FieldLabel T={T}>Name</FieldLabel>
-          <input value={name} onChange={e => setName(e.target.value)} placeholder="Hazy IPA" style={{
-            width:'100%', padding:'12px 14px', borderRadius:14,
-            background:T.card, border:`1px solid ${T.line}`,
-            fontSize:15, color:T.ink, outline:'none', fontFamily:'inherit',
-          }}/>
+          <FieldLabel T={T}>Category</FieldLabel>
+          <select value={drinkCat} onChange={e => setDrinkCat(e.target.value)} style={selectStyle}>
+            {DRINK_CATEGORIES.map(dc => (
+              <option key={dc.id} value={dc.id}>{dc.name}</option>
+            ))}
+          </select>
         </div>
 
+        {/* Name */}
         <div style={{ marginTop:12 }}>
-          <FieldLabel T={T}>Note <span style={{ color:T.inkMuted, fontWeight:400 }}>· optional</span></FieldLabel>
-          <input value={sub} onChange={e => setSub(e.target.value)} placeholder="Hoppy, juicy, 6.8%" style={{
-            width:'100%', padding:'12px 14px', borderRadius:14,
-            background:T.card, border:`1px solid ${T.line}`,
-            fontSize:15, color:T.ink, outline:'none', fontFamily:'inherit',
-          }}/>
+          <FieldLabel T={T}>Name</FieldLabel>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder={
+            drinkCat === 'beer' ? 'e.g. Hazy IPA' :
+            drinkCat === 'wine' ? 'e.g. Cabernet' :
+            drinkCat === 'spirits' ? 'e.g. Bourbon' :
+            drinkCat === 'mixed' ? 'e.g. Gin & Tonic' :
+            drinkCat === 'cider' ? 'e.g. Apple Cider' :
+            drinkCat === 'seltzer' ? 'e.g. White Claw' :
+            'e.g. Mystery Brew'
+          } style={inputStyle}/>
         </div>
 
+        {/* ABV */}
+        <div style={{ marginTop:12 }}>
+          <FieldLabel T={T}>
+            ABV <span style={{ color:T.inkMuted, fontWeight:400, textTransform:'none', letterSpacing:0 }}>· optional</span>
+          </FieldLabel>
+          <div style={{ position:'relative' }}>
+            <input
+              type="number"
+              value={abv}
+              onChange={e => setAbv(e.target.value)}
+              placeholder={`default ${selectedDC.defaultAbv}`}
+              min="0" max="100" step="0.1"
+              style={{ ...inputStyle, paddingRight:36 }}
+            />
+            <div style={{ position:'absolute', right:14, top:'50%', transform:'translateY(-50%)', fontFamily:'JetBrains Mono, monospace', fontSize:13, color:T.inkMuted, pointerEvents:'none' }}>%</div>
+          </div>
+          <div style={{ fontSize:10, color:T.inkMuted, marginTop:4, paddingLeft:2 }}>
+            Used for BAC estimation. If blank, standard {selectedDC.defaultAbv}% is assumed.
+          </div>
+        </div>
+
+        {/* Note */}
+        <div style={{ marginTop:12 }}>
+          <FieldLabel T={T}>
+            Note <span style={{ color:T.inkMuted, fontWeight:400, textTransform:'none', letterSpacing:0 }}>· optional</span>
+          </FieldLabel>
+          <input value={note} onChange={e => setNote(e.target.value)} placeholder="Hoppy, 6.8%, local brew…" style={inputStyle}/>
+        </div>
+
+        {/* Color */}
         <div style={{ marginTop:14 }}>
           <FieldLabel T={T}>Color</FieldLabel>
           <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
@@ -822,13 +1234,16 @@ function AddSheet({ T, open, onClose, onSave }) {
           </div>
         </div>
 
-        <button disabled={!canSave} onClick={() => { onSave({ name:name.trim(), sub:sub.trim(), swatch:color }); onClose(); }} style={{
+        <button disabled={!canSave} onClick={() => {
+          onSave({ name:name.trim(), drinkCategory:drinkCat, abv: abv !== '' ? Number(abv) : null, sub: note.trim(), swatch:color });
+          onClose();
+        }} style={{
           ...btn, marginTop:22, width:'100%',
           background: canSave ? T.stout : T.bgDeep,
           color: canSave ? T.bg : T.inkMuted,
           padding:'14px 16px', borderRadius:16, fontSize:15, fontWeight:500, transition:'all 200ms',
         }}>
-          Save type
+          Save drink type
         </button>
       </div>
     </>
@@ -897,9 +1312,9 @@ function App() {
   const [addOpen, setAddOpen]       = useState(false);
   const [settingsOpen, setSettings] = useState(false);
 
-  const addCategory = ({ name, sub, swatch }) => {
+  const addCategory = ({ name, drinkCategory, abv, sub, swatch }) => {
     const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Date.now().toString(36).slice(-3);
-    setCategories(prev => [...prev, { id, name, sub: sub || 'Custom', swatch }]);
+    setCategories(prev => [...prev, { id, name, drinkCategory: drinkCategory || 'beer', abv: abv ?? null, sub: sub || '', swatch }]);
   };
 
   useEffect(() => {
